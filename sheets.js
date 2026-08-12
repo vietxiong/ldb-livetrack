@@ -36,6 +36,9 @@ export class SheetsDB {
 
   async init() {
     if (!this.mock) {
+      // Strip any accidental spaces/newlines/quotes from the pasted Sheet ID.
+      this.sheetId = String(this.sheetId || '').trim().replace(/^["']|["']$/g, '');
+      console.log('[sheets] Using sheetId =', JSON.stringify(this.sheetId), '(length', this.sheetId.length + ')');
       if (!this.sheetId) throw new Error('GOOGLE_SHEET_ID is not set');
       const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
       // Use the explicit JWT client (token-exchange flow). This avoids the
@@ -119,7 +122,7 @@ export class SheetsDB {
 
   // ---- private ----
   async #ensureTabs() {
-    const meta = await this.sheets.spreadsheets.get({ spreadsheetId: this.sheetId });
+    const meta = await this.sheets.spreadsheets.get({ spreadsheetId: this.sheetId, fields: 'sheets.properties.title' });
     const titles = meta.data.sheets.map((s) => s.properties.title);
     const toCreate = [USERS_TAB, DEVICES_TAB, LOCATIONS_TAB].filter((t) => !titles.includes(t));
     if (toCreate.length) {
