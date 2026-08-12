@@ -197,4 +197,11 @@ async function seedAdmin() {
   }
 }
 db.init().then(seedAdmin).then(() => server.listen(PORT, () => console.log(`[server] Listening on http://localhost:${PORT} (mock=${MOCK})`)))
-  .catch((e) => { console.error('[server] Failed to start:', e.message); process.exit(1); });
+  .catch((e) => {
+    console.error('[server] Failed to start:', e.message);
+    // Detailed Google API error (which call / field is invalid):
+    if (e.response && e.response.data) console.error('[server] Google API said:', JSON.stringify(e.response.data, null, 2));
+    if (e.errors) console.error('[server] errors:', JSON.stringify(e.errors, null, 2));
+    console.error('[server] full error:', e);
+    process.exit(1);
+  });
