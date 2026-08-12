@@ -122,7 +122,31 @@ export class SheetsDB {
 
   // ---- private ----
   async #ensureTabs() {
-    const meta = await this.sheets.spreadsheets.get({ spreadsheetId: this.sheetId, fields: 'sheets.properties.title' });
+    let meta;
+    try {
+      meta = await this.sheets.spreadsheets.get({ spreadsheetId: this.sheetId, fields: 'sheets.properties.title' });
+    } catch (e) {
+      // Translate Google's error into a plain-English verdict so the log tells
+      // you EXACTLY what to fix, instead of a raw 400/403/404.
+      const status = e.code || e.response?.status;
+      const saEmail = this._serviceAccountEmail || '(the service account)';
+      let verdict;
+      if (status === 400) {
+        verdict = `The Sheets API cannot open GOOGLE_SHEET_ID "${this.sheetId}". `
+          + `This means that ID is NOT a native Google Sheet — it is either a wrong/incomplete ID, or it points to an uploaded Excel file, a Google Doc, or a Drive folder (those give 400). `
+          + `FIX: go to https://sheets.google.com, click "Blank spreadsheet", copy the new ID from the URL (between /d/ and /edit), share it with the service account as Editor, and set that as GOOGLE_SHEET_ID.`;
+      } else if (status === 403) {
+        verdict = `The sheet exists but is NOT shared with the service account. `
+          + `Open the sheet -> Share -> add "${saEmail}" as Editor -> Send.`;
+      } else if (status === 404) {
+        verdict = `No spreadsheet has ID "${this.sheetId}". The ID is wrong or the sheet was deleted. Copy the ID again from the real sheet's URL.`;
+      } else {
+        verdict = `Could not open the sheet (status ${status}): ${e.message}`;
+      }
+      const err = new Error('SHEET ACCESS PROBLEM -> ' + verdict);
+      err.friendly = true;
+      throw err;
+    }
     const titles = meta.data.sheets.map((s) => s.properties.title);
     const toCreate = [USERS_TAB, DEVICES_TAB, LOCATIONS_TAB].filter((t) => !titles.includes(t));
     if (toCreate.length) {
