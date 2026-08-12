@@ -38,17 +38,23 @@ export class SheetsDB {
     if (!this.mock) {
       if (!this.sheetId) throw new Error('GOOGLE_SHEET_ID is not set');
       const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
-      let authConfig;
+      // Use the explicit JWT client (token-exchange flow). This avoids the
+      // "self-signed JWT" that GoogleAuth uses by default, which the Sheets API
+      // rejects with 400 INVALID_ARGUMENT on some setups.
+      let creds;
       if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-        // On a host: the whole service-account JSON is pasted into an env var.
-        authConfig = { credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON), scopes };
+        creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
       } else {
-        // Locally: read the JSON key file from disk.
         if (!fs.existsSync(this.serviceAccountFile)) throw new Error('Service account file not found. Set MOCK_SHEETS=1 to test without Google, or set GOOGLE_SERVICE_ACCOUNT_JSON.');
-        authConfig = { keyFile: this.serviceAccountFile, scopes };
+        creds = JSON.parse(fs.readFileSync(this.serviceAccountFile, 'utf8'));
       }
-      const auth = new google.auth.GoogleAuth(authConfig);
-      this.sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+      const authClient = new google.auth.JWT({
+        email: creds.client_email,
+        key: creds.private_key,
+        scopes,
+      });
+      await authClient.authorize();
+      this.sheets = google.sheets({ version: 'v4', auth: authClient });
       await this.#ensureTabs();
       await this.#loadCaches();
     } else {
