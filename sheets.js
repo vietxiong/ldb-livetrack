@@ -31,6 +31,7 @@ export class SheetsDB {
     this.sheets = null;
     this.userCache = new Map();
     this.deviceCache = new Map();
+    this.sheetIds = {}; // tab title -> numeric sheetId (needed to delete rows)
     this._mockHistory = {};
   }
 
@@ -155,6 +156,39 @@ export class SheetsDB {
     await this.#ensureHeader(USERS_TAB, USER_HEADERS);
     await this.#ensureHeader(DEVICES_TAB, DEVICE_HEADERS);
     await this.#ensureHeader(LOCATIONS_TAB, LOCATION_HEADERS);
+    // Capture each tab's numeric sheetId (needed for deleting rows when pruning).
+    const ids = await this.sheets.spreadsheets.get({ spreadsheetId: this.sheetId, fields: 'sheets.properties(title,sheetId)' });
+    this.sheetIds = {};
+    ids.data.sheets.forEach((s) => { this.sheetIds[s.properties.title] = s.properties.sheetId; });
+  }
+
+  // Delete Locations rows older than `retentionHours` (keeps recent history so
+  // the sheet doesn't grow forever). Rows are appended oldest-first, so the old
+  // ones are a contiguous block at the top — we delete them in one call.
+  async pruneLocations(retentionHours = 24) {
+    const cutoff = Date.now() - retentionHours * 3600 * 1000;
+    if (this.mock) {
+      for (const id of Object.keys(this._mockHistory)) {
+        this._mockHistory[id] = (this._mockHistory[id] || []).filter((r) => Date.parse(r.timestamp) >= cutoff);
+      }
+      return { deleted: 0 };
+    }
+    const res = await this.sheets.spreadsheets.values.get({ spreadsheetId: this.sheetId, range: `${LOCATIONS_TAB}!B2:B` });
+    const rows = res.data.values || [];
+    let k = 0;
+    for (const r of rows) {
+      const t = Date.parse(r[0]);
+      if (!Number.isNaN(t) && t < cutoff) k++; else break; // stop at first row we keep
+    }
+    if (k <= 0) return { deleted: 0 };
+    const sheetId = this.sheetIds[LOCATIONS_TAB];
+    if (sheetId == null) return { deleted: 0 };
+    await this.sheets.spreadsheets.batchUpdate({
+      spreadsheetId: this.sheetId,
+      requestBody: { requests: [{ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: 1, endIndex: 1 + k } } }] },
+    });
+    console.log(`[sheets] Pruned ${k} location row(s) older than ${retentionHours}h.`);
+    return { deleted: k };
   }
   async #ensureHeader(tab, headers) {
     const res = await this.sheets.spreadsheets.values.get({ spreadsheetId: this.sheetId, range: `${tab}!A1:A1` });

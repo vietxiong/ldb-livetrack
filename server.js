@@ -24,6 +24,8 @@ const PORT = Number(process.env.PORT || 3000);
 const OFFLINE_AFTER = Number(process.env.OFFLINE_AFTER_SECONDS || 90);
 const MOCK = process.env.MOCK_SHEETS === '1';
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
+// How long to keep location history (hours). 24 ≈ "just today". Older rows are auto-deleted.
+const RETAIN_HOURS = Number(process.env.LOCATIONS_RETENTION_HOURS || 24);
 
 const db = new SheetsDB({ mock: MOCK, sheetId: process.env.GOOGLE_SHEET_ID, serviceAccountFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE });
 
@@ -160,6 +162,13 @@ app.get('/api/devices/:id/locations', auth, async (req, res) => {
   res.json({ deviceId: d.deviceId, locations: await db.getDeviceLocations(d.deviceId, Math.min(Number(req.query.limit || 100), 1000)) });
 });
 
+// ---- maintenance: admin can delete old history now ----
+app.post('/api/maintenance/prune', auth, requireRole('admin'), async (req, res) => {
+  const hours = Number(req.body?.hours ?? RETAIN_HOURS);
+  try { const r = await db.pruneLocations(Number.isFinite(hours) ? hours : RETAIN_HOURS); res.json({ ok: true, deleted: r.deleted }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- pairing + tracking (phone side; auth is the pairing code) ----
 app.post('/api/pair', async (req, res) => {
   const { code, platform, model, hardwareId } = req.body || {};
@@ -208,7 +217,14 @@ async function seedAdmin() {
     console.log(`[server] Seeded admin — username: admin  password: ${DEFAULT_ADMIN_PASSWORD}`);
   }
 }
-db.init().then(seedAdmin).then(() => server.listen(PORT, () => console.log(`[server] Listening on http://localhost:${PORT} (mock=${MOCK})`)))
+// Keep the Locations sheet from growing forever: prune on startup, then hourly.
+function schedulePrune() {
+  const run = () => db.pruneLocations(RETAIN_HOURS).catch((e) => console.error('[prune]', e.message));
+  run();
+  setInterval(run, 60 * 60 * 1000);
+}
+
+db.init().then(seedAdmin).then(schedulePrune).then(() => server.listen(PORT, () => console.log(`[server] Listening on http://localhost:${PORT} (mock=${MOCK}, keep ${RETAIN_HOURS}h history)`)))
   .catch((e) => {
     console.error('[server] Failed to start:', e.message);
     // Detailed Google API error (which call / field is invalid):
