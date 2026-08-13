@@ -125,6 +125,18 @@ app.post('/api/devices', auth, requireRole('admin', 'controller'), async (req, r
   res.json({ device: decorateDevice(d) });
 });
 
+// Admin/controller renames a device (member cannot).
+app.post('/api/devices/:id/name', auth, requireRole('admin', 'controller'), async (req, res) => {
+  const d = db.getDevice(req.params.id);
+  if (!canSeeDevice(req.user, d)) return res.status(403).json({ error: 'forbidden' });
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  d.name = name;
+  await db.saveDevice(d);
+  broadcastDevice(d, 'location'); // refresh the label on the live map
+  res.json({ device: decorateDevice(d) });
+});
+
 // Admin/controller enables or disables a device's sharing (member cannot).
 app.post('/api/devices/:id/state', auth, requireRole('admin', 'controller'), async (req, res) => {
   const d = db.getDevice(req.params.id);
